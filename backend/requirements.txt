@@ -22,6 +22,8 @@ torchaudio>=2.0.0
 SQLAlchemy>=2.0.0
 alembic>=1.11.0          # For database migrations
 psycopg2-binary>=2.9.7   # PostgreSQL adapter
+alembic>=1.13.0
+psycopg2-binary>=2.9.9
 
 # 4. MLOps & Caching
 mlflow>=2.5.0

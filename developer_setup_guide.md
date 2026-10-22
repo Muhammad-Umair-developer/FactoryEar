@@ -39,14 +39,22 @@ cd backend
   .venv\Scripts\activate
   ```
 
-**3. Install the dependencies:**
+## 3. Database Setup (PostgreSQL)
+This project requires PostgreSQL. 
+1. Install PostgreSQL and open pgAdmin 4.
+2. Create a new database named exactly `factory_ear_db`.
+3. Apply the database tables by running Alembic migrations from the `backend/` folder:
+   ```bash
+   alembic upgrade head
+
+**4. Install the dependencies:**
 Make sure your pip is up to date, then install the required packages:
 ```bash
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-**4. Run the local API server:**
+**5. Run the local API server:**
 *(Note: We will implement the actual API in `main.py` soon. This is the command you will use.)*
 ```bash
 uvicorn app.main:app --reload --port 8000

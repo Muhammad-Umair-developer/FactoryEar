@@ -38,8 +38,8 @@ class Settings(BaseSettings):
     # Use the @property decorator to dynamically construct the database connection string on the fly.
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
-        # Return a fully formatted PostgreSQL connection URI using the individual variables defined above.
-        return f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        # Notice the addition of '+psycopg2' here
+        return f"postgresql+psycopg2://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
     # Define an inner Config class to tell Pydantic where to look for these environment variables.
     class Config:
