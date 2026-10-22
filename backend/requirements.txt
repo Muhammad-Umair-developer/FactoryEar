@@ -1,0 +1,38 @@
+# ==========================================
+# FACTORY EAR: CORE DEPENDENCIES
+# ==========================================
+
+# 1. API & Web Server (Backend)
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+pydantic>=2.0
+pydantic-settings>=2.0
+python-multipart>=0.0.6  # Required for accepting .wav file uploads
+
+# 2. Digital Signal Processing (DSP) & Machine Learning
+numpy>=1.26.0              # Pinned for PyTorch/Librosa compatibility
+pandas>=2.0.0
+scipy>=1.10.0
+librosa>=0.10.0
+scikit-learn>=1.3.0
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# 3. Database & ORM
+SQLAlchemy>=2.0.0
+alembic>=1.11.0          # For database migrations
+psycopg2-binary>=2.9.7   # PostgreSQL adapter
+
+# 4. MLOps & Caching
+mlflow>=2.5.0
+redis>=4.6.0
+
+# ==========================================
+# DEVELOPMENT & TESTING (CI/CD)
+# ==========================================
+pytest>=7.4.0
+pytest-cov>=4.1.0        # For coverage reports
+pytest-mock>=3.11.1      # For mocking DB/API calls
+httpx>=0.24.1            # For testing FastAPI endpoints
+black>=23.7.0            # Python code formatter
+flake8>=6.1.0            # Python linter

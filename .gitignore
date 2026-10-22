@@ -1,1 +1,63 @@
+# ==========================================
+# 1. PYTHON & BACKEND
+# ==========================================
+# Environments
+.venv/
+env/
+venv/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ==========================================
+# 2. NODE.JS & FRONTEND (REACT)
+# ==========================================
+node_modules/
+build/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ==========================================
+# 3. DATASETS & MACHINE LEARNING ARTIFACTS
+# ==========================================
+# Ignore all raw and processed data downloads (to prevent Git crashing on 6GB+ files)
+data/raw/*
+data/processed/*
+*.zip
+*.tar.gz
+
+# Allow curated demo samples to be committed (for portfolio/testing)
+!data/demo_samples/
+
+# Ignore serialized heavy ML models and MLflow tracking logs
+saved_models/*.pt
+saved_models/*.joblib
+mlruns/
+*.onnx
+
+# ==========================================
+# 4. SECRETS & ENVIRONMENT VARIABLES
+# ==========================================
 .env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+
+# ==========================================
+# 5. OS & IDE CONFIGURATIONS
+# ==========================================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
