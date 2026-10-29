@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Import our validated settings object from the config module we just created.
 from app.core.config import settings
 from app.api.endpoints import machines
+from app.api.endpoints import machines, inference # Added inference
 
 # Define a factory function to construct and configure the FastAPI application instance.
 def get_application() -> FastAPI:
@@ -37,6 +38,8 @@ def get_application() -> FastAPI:
 # Call the factory function to create the global 'app' object that Uvicorn will serve.
 app = get_application()
 app.include_router(machines.router, prefix="/api/v1/machines", tags=["Machines"])
+app.include_router(machines.router, prefix="/api/v1/machines", tags=["Machines"])
+app.include_router(inference.router, prefix="/api/v1/inference", tags=["Inference"]) # New route
 
 # Define a simple GET endpoint at the root "/health" path to monitor server uptime.
 # Tag this endpoint as "System" so it groups neatly in the Swagger UI documentation.
