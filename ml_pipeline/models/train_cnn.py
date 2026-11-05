@@ -21,7 +21,7 @@ def train_model(data_dir: str, model_save_path: str, epochs: int = 10, batch_siz
     logger.info(f"Training on device: {device}")
 
     # 2. Load dataset and split into 80% training, 20% validation
-    dataset = SpectrogramDataset(data_dir=data_dir)
+    dataset = SpectrogramDataset(tensor_dir=data_dir)
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
@@ -88,10 +88,10 @@ def train_model(data_dir: str, model_save_path: str, epochs: int = 10, batch_siz
     logger.info(f"Training complete. Model weights saved to {model_save_path}")
 
 if __name__ == "__main__":
-    # Pointing to the root raw folder to ingest -6dB, 0dB, and 6dB datasets simultaneously
+    # Point to the processed tensors directory instead of the raw audio directory
     train_model(
-        data_dir="data/raw", 
-        model_save_path="ml_pipeline/saved_models/cnn_model_full.pth", # Save as a new file
-        epochs=15, # Bumped to 15 epochs for the larger dataset
+        data_dir="data/processed/tensors", 
+        model_save_path="ml_pipeline/saved_models/cnn_model_full.pth",
+        epochs=15,
         batch_size=32
     )

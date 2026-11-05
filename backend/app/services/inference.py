@@ -31,7 +31,7 @@ class AudioInferenceService:
             output = self.model(tensor_spec)
             anomaly_prob = output.item()
             
-        is_anomaly = anomaly_prob > 0.15
+        is_anomaly = anomaly_prob > 0.5
         
         return {
             "prediction": "anomaly" if is_anomaly else "healthy",
