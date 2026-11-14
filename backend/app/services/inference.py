@@ -29,7 +29,8 @@ class AudioInferenceService:
         # 3. Model Inference
         with torch.no_grad():
             output = self.model(tensor_spec)
-            anomaly_prob = output.item()
+            # Apply sigmoid to convert the raw logit into a 0.0 to 1.0 probability
+            anomaly_prob = torch.sigmoid(output).item() 
             
         is_anomaly = anomaly_prob > 0.5
         
@@ -40,4 +41,4 @@ class AudioInferenceService:
         }
 
 # Initialize a global instance to load the model into memory only once
-inference_service = AudioInferenceService(model_path="../ml_pipeline/saved_models/cnn_model.pth")
+inference_service = AudioInferenceService(model_path="../ml_pipeline/saved_models/cnn_model_full.pth")

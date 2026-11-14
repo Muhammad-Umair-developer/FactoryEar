@@ -16,7 +16,7 @@ def train_model(data_dir: str, model_save_path: str, epochs: int = 10, batch_siz
     """
     Executes the PyTorch training loop for the AnomalyDetectionCNN using a train/validation split.
     """
-    # 1. Device configuration (use GPU if available)
+    # 1. Device configuration
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Training on device: {device}")
 
@@ -31,7 +31,11 @@ def train_model(data_dir: str, model_save_path: str, epochs: int = 10, batch_siz
 
     # 3. Initialize model, loss function, and optimizer
     model = AnomalyDetectionCNN().to(device)
-    criterion = nn.BCELoss() # Binary Cross Entropy for binary classification
+    
+    # Apply class weights: Penalize the model 8x more for missing an anomaly
+    pos_weight = torch.tensor([15.0]).to(device)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight) 
+    
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
     logger.info("Starting training loop...")
@@ -45,10 +49,8 @@ def train_model(data_dir: str, model_save_path: str, epochs: int = 10, batch_siz
             inputs = inputs.to(device)
             labels = labels.to(device).float().unsqueeze(1)
             
-            # Zero the parameter gradients
             optimizer.zero_grad()
             
-            # Forward pass, loss calculation, backward pass, and optimization
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
@@ -71,8 +73,8 @@ def train_model(data_dir: str, model_save_path: str, epochs: int = 10, batch_siz
                 loss = criterion(outputs, labels)
                 val_loss += loss.item()
                 
-                # Calculate accuracy
-                predicted = (outputs > 0.5).float()
+                # Apply sigmoid here since it was removed from the CNN forward pass
+                predicted = (torch.sigmoid(outputs) > 0.5).float()
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
                 
@@ -88,7 +90,6 @@ def train_model(data_dir: str, model_save_path: str, epochs: int = 10, batch_siz
     logger.info(f"Training complete. Model weights saved to {model_save_path}")
 
 if __name__ == "__main__":
-    # Point to the processed tensors directory instead of the raw audio directory
     train_model(
         data_dir="data/processed/tensors", 
         model_save_path="ml_pipeline/saved_models/cnn_model_full.pth",

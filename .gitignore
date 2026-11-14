@@ -32,6 +32,7 @@ yarn-error.log*
 # Ignore all raw and processed data downloads (to prevent Git crashing on 6GB+ files)
 data/raw/*
 data/processed/*
+data/holdout_test/*
 *.zip
 *.tar.gz
 
