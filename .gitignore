@@ -10,6 +10,7 @@ venv/
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
 
 # Testing & Coverage
 .pytest_cache/
@@ -20,8 +21,12 @@ htmlcov/
 # 2. NODE.JS & FRONTEND (REACT)
 # ==========================================
 node_modules/
+frontend/node_modules/
 build/
 dist/
+frontend/dist/
+frontend/build/
+.npm/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -35,13 +40,23 @@ data/processed/*
 data/holdout_test/*
 *.zip
 *.tar.gz
+*.wav
+*.pt
+*.csv
+
+# API temporary audio buffers
+temp_*.wav
 
 # Allow curated demo samples to be committed (for portfolio/testing)
 !data/demo_samples/
 
 # Ignore serialized heavy ML models and MLflow tracking logs
-saved_models/*.pt
-saved_models/*.joblib
+saved_models/
+ml_pipeline/saved_models/
+*.pt
+*.pth
+*.joblib
+*.pkl
 mlruns/
 *.onnx
 
@@ -53,6 +68,7 @@ mlruns/
 .env.development.local
 .env.test.local
 .env.production.local
+.env.*.local
 *.pem
 
 # ==========================================
