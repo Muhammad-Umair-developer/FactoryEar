@@ -1,98 +1,16 @@
-# FACTORY EAR: INDUSTRIAL ACOUSTIC ANOMALY & PREDICTIVE MAINTENANCE ENGINE
+# Factory Ear
 
-[![CI - Backend Tests](https://github.com/Muhammad-Umair-developer/factory-ear/actions/workflows/ci-backend-tests.yml/badge.svg)](https://github.com/Muhammad-Umair-developer/factory-ear/actions/workflows/ci-backend-tests.yml)
-[![CD - Docker Build Verification](https://github.com/Muhammad-Umair-developer/factory-ear/actions/workflows/cd-docker-build.yml/badge.svg)](https://github.com/Muhammad-Umair-developer/factory-ear/actions/workflows/cd-docker-build.yml)
-![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688?logo=fastapi&logoColor=white)
-![PyTorch](https://img.shields.io/badge/PyTorch-2D%20CNN-EE4C2C?logo=pytorch&logoColor=white)
-![React](https://img.shields.io/badge/React-TypeScript-61DAFB?logo=react&logoColor=black)
-![Docker](https://img.shields.io/badge/Docker-Compose%20%2B%20Nginx-2496ED?logo=docker&logoColor=white)
+Industrial acoustic anomaly detection and predictive maintenance engine for metal fabrication plants. Factory Ear ingests `.wav` recordings from factory machinery—industrial pumps and CNC metal cutters/grinders—converts audio into $128$-bin Log-Mel spectrograms at $16\text{ kHz}$ mono, and runs specialized PyTorch 2D Convolutional Neural Networks (CNNs) to flag pump anomalies and estimate progressive cutting-tool wear.
 
-**Document ID:** `FE-ARCH-2026-V5` | **Classification:** Enterprise Technical Specification & Implementation Blueprint  
-**Project Reference:** NIAI Batch 2026 — Project #20 (*Factory Ear — Industrial Machine Anomaly Detector*)  
-**Core Stack:** Python 3.11+ (`venv`), Librosa, Scikit-Learn, PyTorch, FastAPI, SQLAlchemy, PostgreSQL, React, TypeScript, Tailwind CSS v4, TanStack React Query, `WaveSurfer.js`, Docker, Nginx, `pytest`, `unittest.mock`, GitHub Actions
+## Key Capabilities
 
----
+* **Dual-Profile Acoustic Inference:** Separates fluid-machinery anomaly detection (MIMII dataset across `-6 dB`, `0 dB`, and `6 dB` noise floors) from metal-cutting tool wear classification (`SegmentedData` across `520` and `635` RPM operating regimes).
+* **Offline Spectrogram Tensor Pipeline:** Uses `ProcessPoolExecutor` and `AudioPreprocessor` ($16\text{ kHz}$, $10\text{s}$ pad/truncate, $128$-bin Log-Mel spectrogram) to pre-compute `.pt` tensors for fast training while keeping holdout sets physically separated to avoid data leakage.
+* **Lightweight 2D CNN Models:** Uses compact convolutional networks with Global Average Pooling for low-latency CPU inference (`AnomalyDetectionCNN` for binary pump anomaly scoring and `ToolWearCNN` across `BASE`, `FRESH`, `MODERATE`, and `BROKEN` wear states).
+* **Predictive Tool Health Scoring:** Blends multi-class wear probabilities into a $0\text{–}100\%$ `tool_health_score_percent` and raises an `is_about_to_break` warning flag when health falls within `10.0 < score <= 50.0`.
+* **Interactive Diagnostic Workbench:** Provides a React, TypeScript, Tailwind CSS v4, TanStack React Query, and `WaveSurfer.js` interface connected to FastAPI and proxied via Nginx in production.
 
-## Table of Contents
-
-1. [Executive Summary & Business Case](#1-executive-summary--business-case)
-2. [Dual-Dataset Strategy & ML Architecture](#2-dual-dataset-strategy--ml-architecture)
-3. [System Flow Diagram (End-to-End Pipeline)](#3-system-flow-diagram-end-to-end-data--inference-pipeline)
-4. [API Endpoints & Inference Contracts](#4-api-endpoints--inference-contracts)
-5. [Entity-Relationship Diagram (ERD) & Database Schema](#5-entity-relationship-diagram-erd--database-schema)
-6. [Local Development & Automated Testing (`pytest`)](#6-local-development--automated-testing-pytest)
-7. [Docker Compose & Nginx Production Deployment](#7-docker-compose--nginx-production-deployment)
-8. [Production Monorepo Folder Architecture](#8-production-monorepo-folder-architecture)
-9. [Team Roles, Guardrails & CV Highlights](#9-team-roles-guardrails--cv-highlights)
-
----
-
-## 1. EXECUTIVE SUMMARY & BUSINESS CASE
-
-### 1.1 Sheet-Ready MVP Statement
-
-> **MVP Definition:** A dual-profile industrial acoustic monitoring workbench that ingests `.wav` recordings from factory machinery (industrial pumps and CNC metal cutters/grinders), extracts $128$-bin Log-Mel spectrograms at $16\text{ kHz}$ mono, and runs specialized 2D Convolutional Neural Networks (CNNs) to detect pump anomalies and compute a live $0\text{–}100\%$ tool-wear health score with early-warning failure alerts.
-
-### 1.2 Problem Statement & Industry Context
-
-Small-to-medium manufacturing facilities—particularly metal fabrication plants producing heavy metal doors, aluminum frames, and precision components—rarely have the capital budget to retrofit legacy angle grinders, CNC metal cutters, and hydraulic/fluid pumps with wired SCADA vibration telemetry. As a result, maintenance often defaults to reactive "run-to-failure" operations.
-
-Because mechanical friction, cavitation, and blade degradation emit distinct acoustic signatures across industrial frequency bands (including the $2\text{ kHz}$ to $8\text{ kHz}$ cutting/friction region), **Factory Ear** offers a zero-retrofit acoustic screening workflow using standard microphones and `.wav` captures.
-
-### 1.3 Quantified Return on Investment (ROI) & Operational Benchmarks
-
-| Operational KPI | Legacy Reactive Maintenance | With "Factory Ear" Acoustic Triage | Quantified Business Value |
-| :--- | :--- | :--- | :--- |
-| **Sensor Retrofit Cost** | $\$1,500$ to $\$4,000$ per machine | **$\$0$ hardware retrofit** (uses standard mics) | Removes upfront capital barriers for small-to-midsize fabrication shops. |
-| **Tool Wear Tracking** | Manual visual inspection (requires stopping work) | **Live Acoustic Health Score ($0\text{–}100\%$)** + early warning flag | Helps prevent scrap batches caused by worn or dull cutting tools. |
-| **Diagnostic Triage Speed** | Manual floor listening rounds | **Sub-second ML inference** per $10\text{s}$ window | Standardizes acoustic screening across shifts and operators. |
-| **False-Alarm Mitigation** | Noisy static decibel thresholds | **Multi-SNR & multi-class CNN probability scoring** | Balances fault sensitivity against ambient shop-floor noise. |
-
-### 1.4 Operational Guardrails & Compliance Scope
-
-- **Pre-Screening vs. Certified Root-Cause Diagnosis:** Factory Ear operates as an **acoustic anomaly and tool-wear pre-screening system**. It flags deviations, wear probabilities, and early-degradation warnings so technicians can prioritize physical inspection; it does not replace certified mechanical root-cause diagnostics or safety interlocks.
-- **Domain Scope & Holdout Discipline:** Models are trained on domain-specific industrial datasets (`MIMII` fluid pumps and `SegmentedData` cutting/grinding tools) and evaluated against physically isolated holdout `.wav` files excluded prior to tensor generation and training so validation metrics are not distorted by data leakage or out-of-distribution (OOD) environment shifts.
-
----
-
-## 2. DUAL-DATASET STRATEGY & ML ARCHITECTURE
-
-Factory Ear separates fluid-machinery anomaly detection from metal-cutting tool wear into two dedicated 2D CNN pipelines rather than forcing a single model to conflate distinct physical acoustics.
-
-### 2.1 Profile A: Industrial Fluid Machinery — Phase 1 (`AnomalyDetectionCNN`)
-
-- **Dataset Source:** MIMII Dataset (Zenodo), spanning `-6_dB`, `0_dB`, and `6_dB` Signal-to-Noise Ratio (SNR) floors.
-- **Offline Tensor Pipeline:** `ml_pipeline/data/tensor_generator.py` uses `ProcessPoolExecutor` and `AudioPreprocessor` ($16,000\text{ Hz}$, $10\text{s}$ pad/truncate, $128$-bin Log-Mel spectrogram) to pre-compute `.pt` tensors into `data/processed/tensors/` (with resumability and holdout isolation in `data/holdout_test/`).
-- **Model & Training:** `AnomalyDetectionCNN` (`ml_pipeline/models/cnn.py`) uses three `Conv2d` + `MaxPool2d` blocks ($1 \rightarrow 16 \rightarrow 32 \rightarrow 64$ channels), `AdaptiveAvgPool2d((1, 1))` to keep parameter count compact and inference fast, dropout ($0.3$), and `BCEWithLogitsLoss` with positive class weighting in `ml_pipeline/models/train_cnn.py`.
-- **Why 2D CNN Over 1D Isolation Forest / RNNs:** Early baseline experiments with a 1D feature `IsolationForest` (`82` spectral features) suffered low anomaly recall under `-6 dB` background noise as long-window averaging diluted short mechanical transients. A lightweight 2D spectrogram CNN captures localized time-frequency fault patterns with fast CPU inference (`ml_pipeline/saved_models/cnn_model_full.pth`, reaching $99.30\%$ validation accuracy at Epoch 15 on the combined MIMII split and verified on isolated holdout files).
-
-### 2.2 Profile B: Metal Fabrication & Tool Wear — Phase 2 (`ToolWearCNN`)
-
-- **Dataset Source:** Cutting Tool Wear Audio Dataset (`SegmentedData` across operational speeds `520` and `635`).
-- **Four Wear States (`STATE_MAP`):**
-  - `0: BASE` — Baseline machine operation (`BASE520`, `BASE635`)
-  - `1: FRESH` — Healthy cutting tool (`FRESH520`, `FRESH635`)
-  - `2: MODERATE` — Progressive blade wear / dulling (`MODERATE520`, `MODERATE635`)
-  - `3: BROKEN` — Chipped or failed tool (`BROKEN520`, `BROKEN635`)
-- **Offline Tensor Pipeline & Training:** `ml_pipeline/data/tensor_generator_phase2.py` strips numeric RPM suffixes (`re.sub(r'\d+', '', parent_folder)`) after isolating holdout files (`data/holdout_test_phase2/`), outputting `data/processed/tensors_phase2/*.pt`. `MultiClassSpectrogramDataset` (`ml_pipeline/data/torch_dataset_phase2.py`) and `ToolWearCNN` (`ml_pipeline/models/cnn_phase2.py`, $4$-class output head) train with `CrossEntropyLoss` and `Adam` in `ml_pipeline/models/train_cnn_phase2.py` (reaching **$88.57\%$ validation accuracy** at Epoch 15 in `ml_pipeline/saved_models/cnn_phase2_toolwear.pth`).
-- **Predictive "About to Break" Health Scoring (`backend/app/services/inference_phase2.py`):**
-  Softmax probabilities $(p_{\text{BASE}}, p_{\text{FRESH}}, p_{\text{MODERATE}}, p_{\text{BROKEN}})$ are blended across active wear states (`wear_sum = p_fresh + p_moderate + p_broken`):
-
-  $$\text{health\_score} = \begin{cases} \dfrac{1.0 \cdot p_{\text{FRESH}} + 0.5 \cdot p_{\text{MODERATE}} + 0.0 \cdot p_{\text{BROKEN}}}{\text{wear\_sum}}, & \text{wear\_sum} > 0.01 \\ 1.0, & \text{otherwise} \end{cases}$$
-
-  $$\text{tool\_health\_score\_percent} = \text{round}(\text{health\_score} \times 100,\ 2)$$
-
-  $$\text{is\_about\_to\_break} = (10.0 < \text{tool\_health\_score\_percent} \le 50.0)$$
-
-### 2.3 Frontend Diagnostic Workbench (`frontend/`)
-
-- Built with **Vite**, **React**, **TypeScript**, **Tailwind CSS v4**, **Axios**, **TanStack React Query**, and **`WaveSurfer.js`**.
-- Supports switching between **Industrial Pump** (`POST /api/v1/inference/analyze`) and **CNC Cutter / Grinder** (`POST /api/v1/inference/analyze-tool`), uploading `.wav` files, inspecting interactive audio waveforms, stepping through pipeline diagnostics, and surfacing health scores and `is_about_to_break` warnings.
-
----
-
-## 3. SYSTEM FLOW DIAGRAM (END-TO-END DATA & INFERENCE PIPELINE)
+## Architecture & Pipeline
 
 ```text
 +===================================================================================================+
@@ -130,20 +48,32 @@ Factory Ear separates fluid-machinery anomaly detection from metal-cutting tool 
 +===================================================================================================+
 ```
 
----
+### Tool Health Scoring Formula
 
-## 4. API ENDPOINTS & INFERENCE CONTRACTS
+For cutting tools (`POST /api/v1/inference/analyze-tool`), softmax probabilities $(p_{\text{BASE}}, p_{\text{FRESH}}, p_{\text{MODERATE}}, p_{\text{BROKEN}})$ are evaluated across active wear states (`wear_sum = p_fresh + p_moderate + p_broken`):
 
-| Method & Path | Purpose | Request Format | Key Response Fields |
+$$
+\text{health\_score} = \begin{cases} \dfrac{1.0 \cdot p_{\text{FRESH}} + 0.5 \cdot p_{\text{MODERATE}} + 0.0 \cdot p_{\text{BROKEN}}}{\text{wear\_sum}}, & \text{wear\_sum} > 0.01 \\ 1.0, & \text{otherwise} \end{cases}
+$$
+
+$$
+\text{tool\_health\_score\_percent} = \text{round}(\text{health\_score} \times 100,\ 2)
+$$
+
+$$
+\text{is\_about\_to\_break} = (10.0 < \text{tool\_health\_score\_percent} \le 50.0)
+$$
+
+## API Endpoints
+
+| Method & Path | Description | Request | Response Highlights |
 | :--- | :--- | :--- | :--- |
-| `GET /health` | Service & container healthcheck probe | None | `status`, `service`, `version` |
-| `POST /api/v1/inference/analyze` | Phase 1 industrial pump anomaly inference | `multipart/form-data` (`file`: `*.wav`) | `filename`, `status`, `analysis.prediction` (`"healthy"` \| `"anomaly"`), `analysis.anomaly_probability`, `analysis.confidence` |
-| `POST /api/v1/inference/analyze-tool` | Phase 2 cutting tool wear & early-break scoring | `multipart/form-data` (`file`: `*.wav`) | `filename`, `status`, `analysis.prediction` (`"BASE"` \| `"FRESH"` \| `"MODERATE"` \| `"BROKEN"`), `analysis.confidence`, `analysis.tool_health_score_percent`, `analysis.is_about_to_break`, `analysis.all_probabilities` |
-| `/api/v1/machines` | Machine registry & lookup routes (`machines.py`) | JSON / Query params | Registered machine metadata |
+| `GET /health` | Service health check | None | `status`, `service`, `version` |
+| `POST /api/v1/inference/analyze` | Phase 1 industrial pump anomaly detection | `multipart/form-data` (`file`: `*.wav`) | `filename`, `status`, `analysis.prediction` (`"healthy"` \| `"anomaly"`), `analysis.anomaly_probability`, `analysis.confidence` |
+| `POST /api/v1/inference/analyze-tool` | Phase 2 cutting tool wear & early-break check | `multipart/form-data` (`file`: `*.wav`) | `filename`, `status`, `analysis.prediction` (`"BASE"` \| `"FRESH"` \| `"MODERATE"` \| `"BROKEN"`), `analysis.confidence`, `analysis.tool_health_score_percent`, `analysis.is_about_to_break`, `analysis.all_probabilities` |
+| `/api/v1/machines` | Machine registration and listing routes | JSON / Query params | Machine records |
 
----
-
-## 5. ENTITY-RELATIONSHIP DIAGRAM (ERD) & DATABASE SCHEMA
+## Database Schema (ERD)
 
 ```text
 +----------------------------------+          +--------------------------------------+
@@ -188,77 +118,7 @@ Factory Ear separates fluid-machinery anomaly detection from metal-cutting tool 
 +-----------------------------------------+     +------------------------------------+
 ```
 
----
-
-## 6. LOCAL DEVELOPMENT & AUTOMATED TESTING (`pytest`)
-
-### 6.1 Python Virtual Environment & Dependencies
-
-```powershell
-# From project root (D:\Factory Ear)
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-### 6.2 Offline Tensor Generation & Model Training
-
-```powershell
-# Phase 1: Generate MIMII tensors & train binary AnomalyDetectionCNN
-python -m ml_pipeline.data.tensor_generator
-python -m ml_pipeline.models.train_cnn
-
-# Phase 2: Generate SegmentedData tensors & train 4-class ToolWearCNN
-python -m ml_pipeline.data.tensor_generator_phase2
-python -m ml_pipeline.models.train_cnn_phase2
-```
-
-### 6.3 Running the FastAPI Backend & React Frontend Locally
-
-```powershell
-# Terminal 1 — FastAPI API Server
-cd backend
-$env:PYTHONPATH = ".."
-uvicorn app.main:app --reload
-```
-
-```powershell
-# Terminal 2 — Vite + React + TypeScript Dev Server
-cd frontend
-npm ci
-npm run dev
-```
-
-### 6.4 Automated Backend Test Suite (`pytest` + `unittest.mock`)
-
-`backend/tests/conftest.py`, `backend/tests/test_inference_api.py`, and `backend/tests/test_health_scoring.py` mock heavy PyTorch/Librosa execution so endpoint contracts, `.wav` upload validation, `finally`-block temp-file cleanup, and Phase 2 health-score / `is_about_to_break` thresholds execute rapidly:
-
-```powershell
-cd backend
-pytest -v
-```
-
----
-
-## 7. DOCKER COMPOSE & NGINX PRODUCTION DEPLOYMENT
-
-Following 12-factor principles, large datasets (`data/`), local virtual environments (`.venv/`), and `node_modules/` are excluded via `.gitignore` and `frontend/.dockerignore`, while trained `.pth` weights in `ml_pipeline/saved_models` are mounted read-only into `factory-ear-api`.
-
-```powershell
-# From project root
-docker compose up --build
-```
-
-- **Frontend & Reverse Proxy (`factory-ear-ui`):** Served via multi-stage `frontend/Dockerfile` (`node:22-alpine` build $\rightarrow$ `nginx:alpine` on port `80` using `frontend/nginx.conf`), forwarding `/api/` and `/health` to `backend:8000` with a `50M` `.wav` upload limit.
-- **Backend Inference API (`factory-ear-api`):** Built from root context via `backend/Dockerfile` (`python:3.11-slim` + `libsndfile1` + `curl`), exposing port `8000` with `/health` healthchecks.
-- **CI/CD Pipelines (`.github/workflows/`):**
-  - `ci-backend-tests.yml` runs `pytest -v` on pushes and pull requests to `main`.
-  - `cd-docker-build.yml` verifies both `backend/Dockerfile` and `frontend/Dockerfile` builds using Docker Buildx and GitHub Actions layer caching.
-
----
-
-## 8. PRODUCTION MONOREPO FOLDER ARCHITECTURE
+## Project Structure
 
 ```text
 factory-ear/
@@ -296,7 +156,7 @@ factory-ear/
 │   ├── package.json
 │   └── src/
 │       ├── api/
-│       │   └── inferenceClient.ts         # Axios client & strict TypeScript response types
+│       │   └── inferenceClient.ts         # Axios client & TypeScript response types
 │       ├── components/
 │       │   ├── audio/                     # WaveSurfer.js waveform playback components
 │       │   └── layout/                    # Workbench shell & navigation components
@@ -316,7 +176,7 @@ factory-ear/
 │   │   ├── cnn.py                         # AnomalyDetectionCNN (binary 2D CNN)
 │   │   ├── cnn_phase2.py                  # ToolWearCNN (4-class 2D CNN)
 │   │   ├── train_cnn.py                   # Phase 1 training loop
-│   │   ├── train_cnn_phase2.py            # Phase 2 training loop (88.57% val acc)
+│   │   ├── train_cnn_phase2.py            # Phase 2 training loop
 │   │   └── train_isolation_forest.py      # Baseline Isolation Forest trainer
 │   └── saved_models/                      # Git-ignored trained .pth / .pkl artifacts
 ├── .gitignore
@@ -325,21 +185,65 @@ factory-ear/
 └── requirements.txt                       # Unified root Python dependencies
 ```
 
----
+## Getting Started
 
-## 9. TEAM ROLES, GUARDRAILS & CV HIGHLIGHTS
+### Local Development
 
-### Team Roles & Task Distribution
+1. **Create and activate a virtual environment, then install Python dependencies:**
 
-- **ML, Backend & DevOps Engineering:** Engineered the $16\text{ kHz}$ Log-Mel DSP pipeline, multiprocessing `.pt` tensor generators, isolated holdout evaluation, `AnomalyDetectionCNN` and `ToolWearCNN` training pipelines, `tool_health_score_percent` / `is_about_to_break` logic, FastAPI inference services, `pytest` test suite, `docker-compose.yml`, and GitHub Actions workflows.
-- **Frontend & UI Engineering:** Built the React + TypeScript + Tailwind CSS v4 diagnostic workbench, Axios/TanStack React Query data layer, `WaveSurfer.js` audio waveform player, and dual-profile telemetry views proxied through Nginx.
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
 
-### CV & Resume Bullet Points
+2. **Generate `.pt` tensors and train the models (after isolating holdout `.wav` files):**
 
-**Factory Ear — Industrial Machine Acoustic Anomaly & Predictive Maintenance Engine**  
-*Python, PyTorch, Librosa, Scikit-Learn, FastAPI, PostgreSQL, React, TypeScript, Docker, Nginx, `pytest`, GitHub Actions*
+   ```powershell
+   # Phase 1: Pump anomaly detection
+   python -m ml_pipeline.data.tensor_generator
+   python -m ml_pipeline.models.train_cnn
 
-- **Engineered** a dual-profile industrial acoustic pipeline processing $16\text{ kHz}$ audio into $128$-bin Log-Mel spectrogram `.pt` tensors via parallel multiprocessing across mixed-SNR MIMII pump recordings (`-6 dB`, `0 dB`, `6 dB`) and `SegmentedData` CNC cutting/grinding wear states (`BASE`, `FRESH`, `MODERATE`, `BROKEN`), using physically isolated holdout sets to prevent data leakage.
-- **Trained** lightweight 2D CNN architectures with Global Average Pooling for low-latency inference—achieving $99.30\%$ validation accuracy on the combined Phase 1 pump split and $88.57\%$ validation accuracy on Phase 2 multi-class tool wear, plus a continuous $0\text{–}100\%$ `tool_health_score_percent` and `is_about_to_break` early-warning flag.
-- **Built** a FastAPI inference service (`/api/v1/inference/analyze` and `/api/v1/inference/analyze-tool`) with `.wav` validation and safe temporary-file cleanup, paired with a React + TypeScript + `WaveSurfer.js` workbench and a `unittest.mock`-backed `pytest` suite.
-- **Containerized** the stack with multi-stage Dockerfiles, `docker-compose.yml`, and an Nginx reverse proxy, automated via GitHub Actions workflows for backend tests and Docker image builds.
+   # Phase 2: Cutting tool wear classification
+   python -m ml_pipeline.data.tensor_generator_phase2
+   python -m ml_pipeline.models.train_cnn_phase2
+   ```
+
+3. **Start the FastAPI backend:**
+
+   ```powershell
+   cd backend
+   $env:PYTHONPATH = ".."
+   uvicorn app.main:app --reload
+   ```
+
+4. **Start the React + TypeScript frontend:**
+
+   ```powershell
+   cd frontend
+   npm ci
+   npm run dev
+   ```
+
+### Running Tests
+
+```powershell
+cd backend
+pytest -v
+```
+
+### Docker Compose
+
+Run the full containerized stack with Nginx reverse proxying (`/api/` and `/health` to FastAPI, and `/` to the compiled React SPA):
+
+```powershell
+docker compose up --build
+```
+
+Open `http://localhost` once the containers are up.
+
+## Scope & Notes
+
+* Factory Ear is designed as an acoustic pre-screening and tool-wear monitoring aid rather than a certified root-cause mechanical diagnostic system.
+* Models trained on specific factory datasets (such as MIMII pumps and `SegmentedData` cutters) can experience domain shift on unfamiliar equipment or significantly different recording acoustics, so isolated holdout validation is recommended when evaluating new machine lines.
