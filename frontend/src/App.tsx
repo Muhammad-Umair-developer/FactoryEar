@@ -1,407 +1,328 @@
-import { useState, type DragEvent, type ChangeEvent } from 'react';
+import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import {
-  Activity,
-  AlertTriangle,
-  CheckCircle2,
-  Cpu,
-  FileAudio,
-  Gauge,
-  Loader2,
-  ShieldAlert,
-  UploadCloud,
-  Wrench,
-} from 'lucide-react';
 import {
   inferenceService,
   type PumpInferenceResponse,
   type ToolWearInferenceResponse,
 } from './api/inferenceClient';
-import { WaveformPlayer } from './components/WaveformPlayer';
+import type {
+  ActiveDiagnosticRun,
+  AudioFileDetails,
+  InspectionRecord,
+  MachineProfile,
+  NavigationTab,
+  PipelineStage,
+  ReviewStatus,
+} from './types/diagnostics';
+import { INITIAL_INSPECTIONS } from './data/seedInspections';
+import { Sidebar } from './components/layout/Sidebar';
+import { Topbar } from './components/layout/Topbar';
+import { DashboardView } from './features/dashboard/DashboardView';
+import { UploadView } from './features/upload/UploadView';
+import { PipelineStatusView } from './features/pipeline/PipelineStatusView';
+import { AudioAnalysisView } from './features/analysis/AudioAnalysisView';
+import { ResultsView } from './features/results/ResultsView';
+import { ReportsView } from './features/reports/ReportsView';
+import { SettingsView } from './features/settings/SettingsView';
 
-type MachineProfile = 'tool' | 'pump';
+function buildStages(
+  profile: MachineProfile,
+  state: 'idle' | 'running' | 'completed' | 'error',
+): PipelineStage[] {
+  const statusFor = (idx: number): PipelineStage['status'] => {
+    if (state === 'idle') return 'pending';
+    if (state === 'completed') return 'completed';
+    if (state === 'error') return idx < 2 ? 'completed' : idx === 2 ? 'error' : 'pending';
+    return idx === 0 ? 'completed' : idx === 1 ? 'running' : 'pending';
+  };
+
+  return [
+    {
+      id: 1,
+      name: 'WAV Payload Ingestion',
+      detail: 'Validating 16-bit PCM .wav upload and streaming multipart form data to FastAPI.',
+      status: statusFor(0),
+    },
+    {
+      id: 2,
+      name: 'Librosa DSP & Log-Mel Spectrogram',
+      detail: 'Resampling to 16,000 Hz mono, padding/trimming to 10s, extracting [1, 1, 128, 313] tensor.',
+      status: statusFor(1),
+    },
+    {
+      id: 3,
+      name:
+        profile === 'metal-cutter'
+          ? 'ToolWearCNN Forward Pass (Phase 2)'
+          : 'AnomalyDetectionCNN Forward Pass (Phase 1)',
+      detail:
+        profile === 'metal-cutter'
+          ? 'Evaluating 4-class Softmax probabilities (BASE, FRESH, MODERATE, BROKEN) and health score.'
+          : 'Evaluating binary anomaly logit against MIMII -6 dB / 0 dB / +6 dB acoustic baseline.',
+      status: statusFor(2),
+    },
+    {
+      id: 4,
+      name: 'Diagnostic Report & Audit Logging',
+      detail: 'Serializing prediction JSON, checking is_about_to_break threshold, and appending session log.',
+      status: statusFor(3),
+    },
+  ];
+}
 
 export default function App() {
-  const [profile, setProfile] = useState<MachineProfile>('tool');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [fileError, setFileError] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
+  const [currentTab, setCurrentTab] = useState<NavigationTab>('dashboard');
+  const [selectedProfile, setSelectedProfile] = useState<MachineProfile>('metal-cutter');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const pumpMutation = useMutation<PumpInferenceResponse, Error, File>({
-    mutationFn: (file) => inferenceService.analyzePump(file),
+  const [engineerName, setEngineerName] = useState('M. Tariq');
+  const [machineId, setMachineId] = useState('CNC-MILL-04');
+  const [audioDetails, setAudioDetails] = useState<AudioFileDetails | null>(null);
+  const [inspections, setInspections] = useState<InspectionRecord[]>(INITIAL_INSPECTIONS);
+  const [activeRun, setActiveRun] = useState<ActiveDiagnosticRun | null>(null);
+  const [elapsedSec, setElapsedSec] = useState<number | null>(null);
+  const [pipelineState, setPipelineState] = useState<'idle' | 'running' | 'completed' | 'error'>('idle');
+
+  const formatTimestamp = () => {
+    const now = new Date();
+    return `${now.toISOString().slice(0, 10)} ${now.toTimeString().slice(0, 5)}`;
+  };
+
+  const handleSelectProfile = (next: MachineProfile) => {
+    setSelectedProfile(next);
+    setMachineId(next === 'metal-cutter' ? 'CNC-MILL-04' : 'PUMP-HYD-00');
+  };
+
+  const handleSelectFile = (file: File) => {
+    const sizeKb = file.size / 1024;
+    const sizeFormatted =
+      sizeKb >= 1024 ? `${(sizeKb / 1024).toFixed(2)} MB` : `${sizeKb.toFixed(1)} KB`;
+    setAudioDetails({
+      file,
+      name: file.name,
+      sizeFormatted,
+      lastModified: new Date(file.lastModified).toLocaleDateString(),
+    });
+    setPipelineState('idle');
+    setElapsedSec(null);
+  };
+
+  const toolMutation = useMutation<
+    { data: ToolWearInferenceResponse; latency: number },
+    Error,
+    File
+  >({
+    mutationFn: async (file) => {
+      const t0 = performance.now();
+      const data = await inferenceService.analyzeToolWear(file);
+      return { data, latency: (performance.now() - t0) / 1000 };
+    },
+    onSuccess: ({ data, latency }) => {
+      const runId = `INSP-26-${Math.floor(1000 + Math.random() * 9000)}`;
+      const ts = formatTimestamp();
+      setElapsedSec(latency);
+      setPipelineState('completed');
+      setActiveRun({
+        id: runId,
+        profile: 'metal-cutter',
+        machineId,
+        timestamp: ts,
+        latencySec: latency,
+        toolResult: data,
+      });
+
+      const isAnomaly =
+        data.analysis.prediction === 'BROKEN' ||
+        data.analysis.prediction === 'MODERATE' ||
+        data.analysis.is_about_to_break;
+
+      setInspections((prev) => [
+        {
+          id: runId,
+          timestamp: ts,
+          machineProfile: 'metal-cutter',
+          machineId,
+          filename: data.filename,
+          resultStatus: data.analysis.prediction,
+          isAnomaly,
+          healthScore: data.analysis.tool_health_score_percent,
+          confidence: Number((data.analysis.confidence * 100).toFixed(2)),
+          reviewStatus: isAnomaly ? 'Pending Review' : 'Approved',
+          operator: engineerName,
+        },
+        ...prev,
+      ]);
+      setCurrentTab('results');
+    },
+    onError: () => {
+      setPipelineState('error');
+    },
   });
 
-  const toolMutation = useMutation<ToolWearInferenceResponse, Error, File>({
-    mutationFn: (file) => inferenceService.analyzeToolWear(file),
+  const pumpMutation = useMutation<
+    { data: PumpInferenceResponse; latency: number },
+    Error,
+    File
+  >({
+    mutationFn: async (file) => {
+      const t0 = performance.now();
+      const data = await inferenceService.analyzePump(file);
+      return { data, latency: (performance.now() - t0) / 1000 };
+    },
+    onSuccess: ({ data, latency }) => {
+      const runId = `INSP-26-${Math.floor(1000 + Math.random() * 9000)}`;
+      const ts = formatTimestamp();
+      setElapsedSec(latency);
+      setPipelineState('completed');
+      setActiveRun({
+        id: runId,
+        profile: 'industrial-pump',
+        machineId,
+        timestamp: ts,
+        latencySec: latency,
+        pumpResult: data,
+      });
+
+      const isAnomaly = data.analysis.prediction === 'anomaly';
+
+      setInspections((prev) => [
+        {
+          id: runId,
+          timestamp: ts,
+          machineProfile: 'industrial-pump',
+          machineId,
+          filename: data.filename,
+          resultStatus: isAnomaly ? 'ANOMALY' : 'HEALTHY',
+          isAnomaly,
+          confidence: Number((data.analysis.confidence * 100).toFixed(2)),
+          reviewStatus: isAnomaly ? 'Pending Review' : 'Approved',
+          operator: engineerName,
+        },
+        ...prev,
+      ]);
+      setCurrentTab('results');
+    },
+    onError: () => {
+      setPipelineState('error');
+    },
   });
 
-  const isAnalyzing = pumpMutation.isPending || toolMutation.isPending;
-  const activeError = profile === 'pump' ? pumpMutation.error : toolMutation.error;
+  const isProcessing = toolMutation.isPending || pumpMutation.isPending;
+  const activeError =
+    selectedProfile === 'metal-cutter'
+      ? toolMutation.error?.message ?? null
+      : pumpMutation.error?.message ?? null;
 
-  const handleProfileChange = (nextProfile: MachineProfile) => {
-    setProfile(nextProfile);
-    setFileError(null);
-    pumpMutation.reset();
-    toolMutation.reset();
-  };
-
-  const validateAndSetFile = (file: File | undefined) => {
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.wav')) {
-      setFileError('Invalid file format. Only uncompressed .wav audio files are supported.');
-      return;
-    }
-    setFileError(null);
-    setSelectedFile(file);
-    pumpMutation.reset();
-    toolMutation.reset();
-  };
-
-  const handleFileInput = (e: ChangeEvent<HTMLInputElement>) => {
-    validateAndSetFile(e.target.files?.[0]);
-  };
-
-  const handleDrop = (e: DragEvent<HTMLLabelElement>) => {
-    e.preventDefault();
-    setIsDragging(false);
-    validateAndSetFile(e.dataTransfer.files?.[0]);
-  };
-
-  const handleAnalyze = () => {
-    if (!selectedFile) return;
-    if (profile === 'pump') {
-      pumpMutation.mutate(selectedFile);
+  const handleStartInspection = () => {
+    if (!audioDetails) return;
+    setPipelineState('running');
+    setElapsedSec(null);
+    setCurrentTab('status');
+    if (selectedProfile === 'metal-cutter') {
+      toolMutation.mutate(audioDetails.file);
     } else {
-      toolMutation.mutate(selectedFile);
+      pumpMutation.mutate(audioDetails.file);
     }
   };
 
-  const toolResult = toolMutation.data?.analysis;
-  const pumpResult = pumpMutation.data?.analysis;
-
-  const getHealthColor = (score: number) => {
-    if (score > 60) return 'text-emerald-400';
-    if (score > 10) return 'text-amber-400';
-    return 'text-rose-500';
-  };
-
-  const getHealthBarColor = (score: number) => {
-    if (score > 60) return 'bg-emerald-500';
-    if (score > 10) return 'bg-amber-400';
-    return 'bg-rose-500';
+  const handleSubmitSignOff = (
+    runId: string,
+    reviewStatus: ReviewStatus,
+    notes: string,
+  ) => {
+    setInspections((prev) =>
+      prev.map((row) =>
+        row.id === runId ? { ...row, reviewStatus, notes } : row,
+      ),
+    );
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 antialiased selection:bg-sky-500/30">
-      {/* Top Bar */}
-      <header className="border-b border-slate-800/80 bg-slate-950/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500/15 ring-1 ring-sky-500/30">
-              <Activity className="h-5 w-5 text-sky-400" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold tracking-tight text-white">Factory Ear</h1>
-              <p className="text-xs text-slate-400">
-                Industrial Acoustic Anomaly &amp; Predictive Maintenance Workbench
-              </p>
-            </div>
-          </div>
+    <div className="flex min-h-screen bg-[#f6f7f9] text-zinc-900 antialiased">
+      <Sidebar
+        currentTab={currentTab}
+        onSelectTab={setCurrentTab}
+        selectedProfile={selectedProfile}
+        onToggleProfile={handleSelectProfile}
+        mobileOpen={mobileMenuOpen}
+        onCloseMobile={() => setMobileMenuOpen(false)}
+        engineerName={engineerName}
+      />
 
-          <div className="hidden sm:flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-300">
-            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-            Inference Engine Ready
-          </div>
-        </div>
-      </header>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Topbar
+          currentTab={currentTab}
+          selectedProfile={selectedProfile}
+          onSelectProfile={handleSelectProfile}
+          onOpenMobileMenu={() => setMobileMenuOpen(true)}
+          isProcessing={isProcessing}
+        />
 
-      <main className="mx-auto max-w-6xl px-6 py-8 space-y-6">
-        {/* Dual-Profile Selector */}
-        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => handleProfileChange('tool')}
-            className={`flex items-start gap-4 rounded-2xl border p-5 text-left transition ${
-              profile === 'tool'
-                ? 'border-sky-500 bg-sky-500/10 shadow-lg shadow-sky-500/5'
-                : 'border-slate-800 bg-slate-900/50 hover:border-slate-700'
-            }`}
-          >
-            <div className="rounded-xl bg-sky-500/15 p-2.5 text-sky-400">
-              <Wrench className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="font-semibold text-white">CNC Metal Cutter — Tool Wear</h2>
-                <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] font-mono text-sky-300">
-                  PHASE 2
-                </span>
-              </div>
-              <p className="mt-1 text-xs text-slate-400">
-                4-class CNN (BASE, FRESH, MODERATE, BROKEN) with 0–100% health score &amp; predictive failure alert.
-              </p>
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleProfileChange('pump')}
-            className={`flex items-start gap-4 rounded-2xl border p-5 text-left transition ${
-              profile === 'pump'
-                ? 'border-indigo-500 bg-indigo-500/10 shadow-lg shadow-indigo-500/5'
-                : 'border-slate-800 bg-slate-900/50 hover:border-slate-700'
-            }`}
-          >
-            <div className="rounded-xl bg-indigo-500/15 p-2.5 text-indigo-400">
-              <Cpu className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="font-semibold text-white">Industrial Pump — Anomaly Detection</h2>
-                <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] font-mono text-indigo-300">
-                  PHASE 1
-                </span>
-              </div>
-              <p className="mt-1 text-xs text-slate-400">
-                Binary MIMII CNN trained across -6dB, 0dB, and 6dB noise floors for fault isolation.
-              </p>
-            </div>
-          </button>
-        </section>
-
-        {/* Upload & Waveform Section */}
-        <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-6 space-y-5">
-          <label
-            onDragOver={(e) => {
-              e.preventDefault();
-              setIsDragging(true);
-            }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={handleDrop}
-            className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-8 transition ${
-              isDragging
-                ? 'border-sky-400 bg-sky-500/10'
-                : 'border-slate-700 bg-slate-900/60 hover:border-slate-600'
-            }`}
-          >
-            <UploadCloud className="h-9 w-9 text-slate-400 mb-3" />
-            <p className="text-sm font-medium text-slate-200">
-              Drag &amp; drop a <span className="font-mono text-sky-400">.wav</span> acoustic recording, or click to browse
-            </p>
-            <p className="mt-1 text-xs text-slate-500">
-              Target endpoint: {profile === 'tool' ? 'POST /api/v1/inference/analyze-tool' : 'POST /api/v1/inference/analyze'}
-            </p>
-            <input
-              type="file"
-              accept=".wav,audio/wav"
-              onChange={handleFileInput}
-              className="hidden"
+        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 lg:px-8">
+          {currentTab === 'dashboard' && (
+            <DashboardView
+              inspections={inspections}
+              onNavigate={setCurrentTab}
+              onSelectProfile={handleSelectProfile}
             />
-          </label>
-
-          {fileError && (
-            <div className="flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-xs text-rose-300">
-              <ShieldAlert className="h-4 w-4 shrink-0" />
-              {fileError}
-            </div>
           )}
 
-          {selectedFile && (
-            <div className="space-y-4">
-              <WaveformPlayer
-                file={selectedFile}
-                accentColor={profile === 'tool' ? '#38bdf8' : '#818cf8'}
-              />
-
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs text-slate-400">
-                  <FileAudio className="h-4 w-4 text-slate-500" />
-                  <span>{(selectedFile.size / 1024).toFixed(1)} KB</span>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleAnalyze}
-                  disabled={isAnalyzing}
-                  className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isAnalyzing ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Running CNN Inference...
-                    </>
-                  ) : (
-                    <>
-                      <Gauge className="h-4 w-4" />
-                      Run Acoustic Diagnostic
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
+          {currentTab === 'upload' && (
+            <UploadView
+              selectedProfile={selectedProfile}
+              onSelectProfile={handleSelectProfile}
+              machineId={machineId}
+              onChangeMachineId={setMachineId}
+              audioDetails={audioDetails}
+              onSelectFile={handleSelectFile}
+              onStartInspection={handleStartInspection}
+              isProcessing={isProcessing}
+              apiError={activeError}
+            />
           )}
 
-          {activeError && (
-            <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-xs text-rose-300">
-              <strong>API Request Failed:</strong> {activeError.message}
-            </div>
+          {currentTab === 'status' && (
+            <PipelineStatusView
+              stages={buildStages(selectedProfile, pipelineState)}
+              isProcessing={isProcessing}
+              elapsedSec={elapsedSec}
+              selectedProfile={selectedProfile}
+              audioDetails={audioDetails}
+              apiError={activeError}
+              onRerun={handleStartInspection}
+              onNavigate={setCurrentTab}
+            />
           )}
-        </section>
 
-        {/* Phase 2: Tool Wear Results */}
-        {profile === 'tool' && toolResult && (
-          <section className="space-y-5">
-            {/* Predictive Maintenance Warning Banner */}
-            {toolResult.is_about_to_break && (
-              <div className="flex items-start gap-3 rounded-2xl border border-amber-500/50 bg-amber-500/15 p-5 text-amber-200">
-                <AlertTriangle className="h-6 w-6 shrink-0 text-amber-400" />
-                <div>
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-amber-300">
-                    Predictive Maintenance Warning: Tool Approaching Failure
-                  </h3>
-                  <p className="mt-1 text-xs text-amber-100/90">
-                    Acoustic health score has dropped to <strong>{toolResult.tool_health_score_percent}%</strong>. Schedule cutting-edge replacement before catastrophic breakage occurs.
-                  </p>
-                </div>
-              </div>
-            )}
+          {currentTab === 'analysis' && (
+            <AudioAnalysisView
+              audioDetails={audioDetails}
+              selectedProfile={selectedProfile}
+              onNavigate={setCurrentTab}
+            />
+          )}
 
-            {toolResult.prediction === 'BROKEN' && (
-              <div className="flex items-start gap-3 rounded-2xl border border-rose-500/60 bg-rose-500/15 p-5 text-rose-200">
-                <ShieldAlert className="h-6 w-6 shrink-0 text-rose-400" />
-                <div>
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-rose-300">
-                    Critical Fault: Tool Broken
-                  </h3>
-                  <p className="mt-1 text-xs text-rose-100/90">
-                    Halt spindle operation immediately and inspect the cutting insert.
-                  </p>
-                </div>
-              </div>
-            )}
+          {currentTab === 'results' && (
+            <ResultsView
+              activeRun={activeRun}
+              engineerName={engineerName}
+              onSubmitSignOff={handleSubmitSignOff}
+              onNavigate={setCurrentTab}
+            />
+          )}
 
-            {/* KPI Cards */}
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-                <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
-                  Predicted Wear State
-                </p>
-                <p className="mt-2 text-3xl font-bold tracking-tight text-white">
-                  {toolResult.prediction}
-                </p>
-              </div>
+          {currentTab === 'reports' && <ReportsView inspections={inspections} />}
 
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-                <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
-                  Tool Health Score
-                </p>
-                <p className={`mt-2 text-3xl font-bold tracking-tight ${getHealthColor(toolResult.tool_health_score_percent)}`}>
-                  {toolResult.tool_health_score_percent.toFixed(1)}%
-                </p>
-                <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-800">
-                  <div
-                    className={`h-full transition-all duration-500 ${getHealthBarColor(toolResult.tool_health_score_percent)}`}
-                    style={{ width: `${Math.min(100, Math.max(0, toolResult.tool_health_score_percent))}%` }}
-                  />
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-                <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
-                  Model Confidence
-                </p>
-                <p className="mt-2 text-3xl font-bold tracking-tight text-sky-400">
-                  {(toolResult.confidence * 100).toFixed(2)}%
-                </p>
-              </div>
-            </div>
-
-            {/* Class Probability Distribution */}
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
-              <h3 className="mb-4 text-sm font-semibold text-slate-200">
-                Softmax Class Probability Distribution
-              </h3>
-              <div className="space-y-3">
-                {(['BASE', 'FRESH', 'MODERATE', 'BROKEN'] as const).map((label) => {
-                  const pct = (toolResult.all_probabilities[label] ?? 0) * 100;
-                  return (
-                    <div key={label} className="space-y-1">
-                      <div className="flex justify-between text-xs font-mono">
-                        <span className="text-slate-300">{label}</span>
-                        <span className="text-slate-400">{pct.toFixed(2)}%</span>
-                      </div>
-                      <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-800">
-                        <div
-                          className="h-full rounded-full bg-sky-500 transition-all duration-500"
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* Phase 1: Pump Anomaly Results */}
-        {profile === 'pump' && pumpResult && (
-          <section className="space-y-5">
-            <div
-              className={`flex items-center gap-3 rounded-2xl border p-5 ${
-                pumpResult.prediction === 'anomaly'
-                  ? 'border-rose-500/50 bg-rose-500/15 text-rose-200'
-                  : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
-              }`}
-            >
-              {pumpResult.prediction === 'anomaly' ? (
-                <ShieldAlert className="h-6 w-6 shrink-0 text-rose-400" />
-              ) : (
-                <CheckCircle2 className="h-6 w-6 shrink-0 text-emerald-400" />
-              )}
-              <div>
-                <h3 className="text-sm font-bold uppercase tracking-wider">
-                  {pumpResult.prediction === 'anomaly'
-                    ? 'Acoustic Anomaly Detected'
-                    : 'Pump Operating Normally'}
-                </h3>
-                <p className="mt-0.5 text-xs opacity-90">
-                  File evaluated: <span className="font-mono">{pumpMutation.data?.filename}</span>
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-                <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
-                  Classification
-                </p>
-                <p className="mt-2 text-3xl font-bold uppercase text-white">
-                  {pumpResult.prediction}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-                <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
-                  Anomaly Probability
-                </p>
-                <p className="mt-2 text-3xl font-bold text-indigo-400">
-                  {(pumpResult.anomaly_probability * 100).toFixed(2)}%
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-                <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
-                  Model Confidence
-                </p>
-                <p className="mt-2 text-3xl font-bold text-sky-400">
-                  {(pumpResult.confidence * 100).toFixed(2)}%
-                </p>
-              </div>
-            </div>
-          </section>
-        )}
-      </main>
+          {currentTab === 'settings' && (
+            <SettingsView
+              engineerName={engineerName}
+              onChangeEngineerName={setEngineerName}
+              defaultProfile={selectedProfile}
+              onChangeDefaultProfile={handleSelectProfile}
+            />
+          )}
+        </main>
+      </div>
     </div>
   );
 }

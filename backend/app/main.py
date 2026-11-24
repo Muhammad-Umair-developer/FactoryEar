@@ -1,5 +1,13 @@
 # backend/app/main.py
 
+import sys
+from pathlib import Path
+
+# Automatically add the project root (D:\Factory Ear) to Python's module search path
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
