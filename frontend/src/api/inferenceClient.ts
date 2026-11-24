@@ -2,7 +2,9 @@ import axios from 'axios';
 
 // 1. Establish the base connection to the FastAPI server
 const apiClient = axios.create({
-  baseURL: 'http://127.0.0.1:8000/api/v1',
+  baseURL: import.meta.env.VITE_API_BASE_URL ?? (
+    import.meta.env.DEV ? 'http://127.0.0.1:8000/api/v1' : '/api/v1'
+  ),
   headers: {
     'Content-Type': 'multipart/form-data',
   },
