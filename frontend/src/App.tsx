@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import {
   inferenceService,
@@ -25,15 +25,23 @@ import { ResultsView } from './features/results/ResultsView';
 import { ReportsView } from './features/reports/ReportsView';
 import { SettingsView } from './features/settings/SettingsView';
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function buildStages(
   profile: MachineProfile,
-  state: 'idle' | 'running' | 'completed' | 'error',
+  activeStep: number, // -1 = idle, 0..3 = currently running stage, 4 = all completed
+  errorStep: number | null,
 ): PipelineStage[] {
   const statusFor = (idx: number): PipelineStage['status'] => {
-    if (state === 'idle') return 'pending';
-    if (state === 'completed') return 'completed';
-    if (state === 'error') return idx < 2 ? 'completed' : idx === 2 ? 'error' : 'pending';
-    return idx === 0 ? 'completed' : idx === 1 ? 'running' : 'pending';
+    if (errorStep !== null) {
+      if (idx < errorStep) return 'completed';
+      if (idx === errorStep) return 'error';
+      return 'pending';
+    }
+    if (activeStep === -1) return 'pending';
+    if (idx < activeStep) return 'completed';
+    if (idx === activeStep) return 'running';
+    return 'pending';
   };
 
   return [
@@ -81,7 +89,15 @@ export default function App() {
   const [inspections, setInspections] = useState<InspectionRecord[]>(INITIAL_INSPECTIONS);
   const [activeRun, setActiveRun] = useState<ActiveDiagnosticRun | null>(null);
   const [elapsedSec, setElapsedSec] = useState<number | null>(null);
-  const [pipelineState, setPipelineState] = useState<'idle' | 'running' | 'completed' | 'error'>('idle');
+
+  // Per-stage pipeline progression state (-1 = idle, 0..3 = running stage, 4 = all done)
+  const [activeStageIndex, setActiveStageIndex] = useState<number>(-1);
+  const [errorStageIndex, setErrorStageIndex] = useState<number | null>(null);
+  const [isPipelineRunning, setIsPipelineRunning] = useState<boolean>(false);
+  const [apiError, setApiError] = useState<string | null>(null);
+
+  // Guards against overlapping runs if the user clicks Re-run quickly
+  const runTokenRef = useRef<number>(0);
 
   const formatTimestamp = () => {
     const now = new Date();
@@ -103,7 +119,9 @@ export default function App() {
       sizeFormatted,
       lastModified: new Date(file.lastModified).toLocaleDateString(),
     });
-    setPipelineState('idle');
+    setActiveStageIndex(-1);
+    setErrorStageIndex(null);
+    setApiError(null);
     setElapsedSec(null);
   };
 
@@ -117,46 +135,6 @@ export default function App() {
       const data = await inferenceService.analyzeToolWear(file);
       return { data, latency: (performance.now() - t0) / 1000 };
     },
-    onSuccess: ({ data, latency }) => {
-      const runId = `INSP-26-${Math.floor(1000 + Math.random() * 9000)}`;
-      const ts = formatTimestamp();
-      setElapsedSec(latency);
-      setPipelineState('completed');
-      setActiveRun({
-        id: runId,
-        profile: 'metal-cutter',
-        machineId,
-        timestamp: ts,
-        latencySec: latency,
-        toolResult: data,
-      });
-
-      const isAnomaly =
-        data.analysis.prediction === 'BROKEN' ||
-        data.analysis.prediction === 'MODERATE' ||
-        data.analysis.is_about_to_break;
-
-      setInspections((prev) => [
-        {
-          id: runId,
-          timestamp: ts,
-          machineProfile: 'metal-cutter',
-          machineId,
-          filename: data.filename,
-          resultStatus: data.analysis.prediction,
-          isAnomaly,
-          healthScore: data.analysis.tool_health_score_percent,
-          confidence: Number((data.analysis.confidence * 100).toFixed(2)),
-          reviewStatus: isAnomaly ? 'Pending Review' : 'Approved',
-          operator: engineerName,
-        },
-        ...prev,
-      ]);
-      setCurrentTab('results');
-    },
-    onError: () => {
-      setPipelineState('error');
-    },
   });
 
   const pumpMutation = useMutation<
@@ -169,59 +147,129 @@ export default function App() {
       const data = await inferenceService.analyzePump(file);
       return { data, latency: (performance.now() - t0) / 1000 };
     },
-    onSuccess: ({ data, latency }) => {
-      const runId = `INSP-26-${Math.floor(1000 + Math.random() * 9000)}`;
-      const ts = formatTimestamp();
-      setElapsedSec(latency);
-      setPipelineState('completed');
-      setActiveRun({
-        id: runId,
-        profile: 'industrial-pump',
-        machineId,
-        timestamp: ts,
-        latencySec: latency,
-        pumpResult: data,
-      });
-
-      const isAnomaly = data.analysis.prediction === 'anomaly';
-
-      setInspections((prev) => [
-        {
-          id: runId,
-          timestamp: ts,
-          machineProfile: 'industrial-pump',
-          machineId,
-          filename: data.filename,
-          resultStatus: isAnomaly ? 'ANOMALY' : 'HEALTHY',
-          isAnomaly,
-          confidence: Number((data.analysis.confidence * 100).toFixed(2)),
-          reviewStatus: isAnomaly ? 'Pending Review' : 'Approved',
-          operator: engineerName,
-        },
-        ...prev,
-      ]);
-      setCurrentTab('results');
-    },
-    onError: () => {
-      setPipelineState('error');
-    },
   });
 
-  const isProcessing = toolMutation.isPending || pumpMutation.isPending;
-  const activeError =
-    selectedProfile === 'metal-cutter'
-      ? toolMutation.error?.message ?? null
-      : pumpMutation.error?.message ?? null;
+  const handleStartInspection = async () => {
+    if (!audioDetails || isPipelineRunning) return;
 
-  const handleStartInspection = () => {
-    if (!audioDetails) return;
-    setPipelineState('running');
+    const currentToken = ++runTokenRef.current;
+    const profileSnapshot = selectedProfile;
+    const machineSnapshot = machineId;
+    const fileSnapshot = audioDetails.file;
+
+    setIsPipelineRunning(true);
+    setApiError(null);
+    setErrorStageIndex(null);
     setElapsedSec(null);
+    setActiveStageIndex(0);
     setCurrentTab('status');
-    if (selectedProfile === 'metal-cutter') {
-      toolMutation.mutate(audioDetails.file);
-    } else {
-      pumpMutation.mutate(audioDetails.file);
+
+    // Kick off the real FastAPI request immediately in parallel with the UI stage stepper
+    const apiPromise =
+      profileSnapshot === 'metal-cutter'
+        ? toolMutation.mutateAsync(fileSnapshot)
+        : pumpMutation.mutateAsync(fileSnapshot);
+
+    try {
+      // Stage 1: WAV Payload Ingestion
+      await sleep(280);
+      if (runTokenRef.current !== currentToken) return;
+      setActiveStageIndex(1);
+
+      // Stage 2: Librosa DSP & Log-Mel Spectrogram
+      await sleep(320);
+      if (runTokenRef.current !== currentToken) return;
+      setActiveStageIndex(2);
+
+      // Stage 3: PyTorch CNN Forward Pass — waits for BOTH real API response & minimum visual beat
+      const [result] = await Promise.all([apiPromise, sleep(380)]);
+      if (runTokenRef.current !== currentToken) return;
+
+      setElapsedSec(result.latency);
+      setActiveStageIndex(3);
+
+      // Stage 4: Diagnostic Report & Audit Logging
+      await sleep(280);
+      if (runTokenRef.current !== currentToken) return;
+
+      const runId = `INSP-26-${Math.floor(1000 + Math.random() * 9000)}`;
+      const ts = formatTimestamp();
+
+      if (profileSnapshot === 'metal-cutter') {
+        const data = result.data as ToolWearInferenceResponse;
+        setActiveRun({
+          id: runId,
+          profile: 'metal-cutter',
+          machineId: machineSnapshot,
+          timestamp: ts,
+          latencySec: result.latency,
+          toolResult: data,
+        });
+
+        const isAnomaly =
+          data.analysis.prediction === 'BROKEN' ||
+          data.analysis.prediction === 'MODERATE' ||
+          data.analysis.is_about_to_break;
+
+        setInspections((prev) => [
+          {
+            id: runId,
+            timestamp: ts,
+            machineProfile: 'metal-cutter',
+            machineId: machineSnapshot,
+            filename: data.filename,
+            resultStatus: data.analysis.prediction,
+            isAnomaly,
+            healthScore: data.analysis.tool_health_score_percent,
+            confidence: Number((data.analysis.confidence * 100).toFixed(2)),
+            reviewStatus: isAnomaly ? 'Pending Review' : 'Approved',
+            operator: engineerName,
+          },
+          ...prev,
+        ]);
+      } else {
+        const data = result.data as PumpInferenceResponse;
+        setActiveRun({
+          id: runId,
+          profile: 'industrial-pump',
+          machineId: machineSnapshot,
+          timestamp: ts,
+          latencySec: result.latency,
+          pumpResult: data,
+        });
+
+        const isAnomaly = data.analysis.prediction === 'anomaly';
+
+        setInspections((prev) => [
+          {
+            id: runId,
+            timestamp: ts,
+            machineProfile: 'industrial-pump',
+            machineId: machineSnapshot,
+            filename: data.filename,
+            resultStatus: isAnomaly ? 'ANOMALY' : 'HEALTHY',
+            isAnomaly,
+            confidence: Number((data.analysis.confidence * 100).toFixed(2)),
+            reviewStatus: isAnomaly ? 'Pending Review' : 'Approved',
+            operator: engineerName,
+          },
+          ...prev,
+        ]);
+      }
+
+      // Mark all 4 stages completed and hold briefly so user sees 100% green checkmarks
+      setActiveStageIndex(4);
+      await sleep(350);
+      if (runTokenRef.current !== currentToken) return;
+
+      setIsPipelineRunning(false);
+      setCurrentTab('results');
+    } catch (err) {
+      if (runTokenRef.current !== currentToken) return;
+      const message = err instanceof Error ? err.message : 'Inference request failed.';
+      setApiError(message);
+      setErrorStageIndex((prev) => (prev !== null ? prev : 2));
+      setIsPipelineRunning(false);
     }
   };
 
@@ -255,7 +303,7 @@ export default function App() {
           selectedProfile={selectedProfile}
           onSelectProfile={handleSelectProfile}
           onOpenMobileMenu={() => setMobileMenuOpen(true)}
-          isProcessing={isProcessing}
+          isProcessing={isPipelineRunning}
         />
 
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 lg:px-8">
@@ -276,19 +324,19 @@ export default function App() {
               audioDetails={audioDetails}
               onSelectFile={handleSelectFile}
               onStartInspection={handleStartInspection}
-              isProcessing={isProcessing}
-              apiError={activeError}
+              isProcessing={isPipelineRunning}
+              apiError={apiError}
             />
           )}
 
           {currentTab === 'status' && (
             <PipelineStatusView
-              stages={buildStages(selectedProfile, pipelineState)}
-              isProcessing={isProcessing}
+              stages={buildStages(selectedProfile, activeStageIndex, errorStageIndex)}
+              isProcessing={isPipelineRunning}
               elapsedSec={elapsedSec}
               selectedProfile={selectedProfile}
               audioDetails={audioDetails}
-              apiError={activeError}
+              apiError={apiError}
               onRerun={handleStartInspection}
               onNavigate={setCurrentTab}
             />
